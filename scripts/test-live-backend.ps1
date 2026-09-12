@@ -1,0 +1,1 @@
+$ErrorActionPreference='Stop';$R=Split-Path -Parent $PSScriptRoot;Set-Location $R;$Py=Join-Path $R '.venv\Scripts\python.exe';& $Py -c "import sys;sys.path.insert(0,'backend');from app.main import voice;v=voice();print('Arabic Piper alignment voice loaded:',type(v).__name__)"

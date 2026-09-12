@@ -1,0 +1,1 @@
+$ErrorActionPreference='Stop';$R=Split-Path -Parent $PSScriptRoot;Set-Location $R;$Py=Join-Path $R '.venv\Scripts\python.exe';if(!(Test-Path $Py)){throw 'Missing .venv'};& $Py -m pip install --upgrade -r backend\requirements.txt

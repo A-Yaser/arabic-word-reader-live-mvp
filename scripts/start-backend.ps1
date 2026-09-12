@@ -1,0 +1,1 @@
+$ErrorActionPreference='Stop';$R=Split-Path -Parent $PSScriptRoot;Set-Location $R;$Py=Join-Path $R '.venv\Scripts\python.exe';if(!(Test-Path $Py)){throw 'Missing .venv'};& $Py -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000
