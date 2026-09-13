@@ -1,1 +1,251 @@
-:root{font-family:"Segoe UI","Noto Kufi Arabic",Tahoma,sans-serif;color:#1f2937;background:#f8fafc}*{box-sizing:border-box}body{margin:0;background:#f8fafc}button{font:inherit}.app{padding:18px;max-width:520px;margin:auto}header{display:flex;gap:12px;align-items:center;margin-bottom:16px}.mark{width:42px;height:42px;border-radius:12px;display:grid;place-items:center;background:#14532d;color:#fff;font-size:22px;font-weight:800}h1{margin:0;font-size:20px}header p{margin:3px 0 0;color:#64748b;font-size:12px}.panel{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:16px;box-shadow:0 8px 22px #0f172a0f}.status{display:flex;gap:8px;align-items:center;color:#475569;font-size:12px}.status i{width:8px;height:8px;border-radius:50%;background:#94a3b8}.status i.ok{background:#16a34a}.current{min-height:54px;display:grid;place-items:center;margin:16px 0 12px;background:#f1f5f9;border-radius:12px;font-size:22px;font-weight:700;color:#14532d}.bar{height:7px;background:#e2e8f0;border-radius:99px;overflow:hidden}.bar span{display:block;height:100%;background:#16a34a}.times{display:flex;justify-content:space-between;color:#64748b;font-size:11px;margin-top:6px}.actions{display:grid;grid-template-columns:1.5fr 1fr 1fr;gap:8px;margin-top:16px}button{border:1px solid #cbd5e1;border-radius:10px;padding:9px 10px;background:#fff;color:#334155;cursor:pointer}button:disabled{opacity:.5;cursor:not-allowed}button.primary{color:#fff;background:#14532d;border-color:#14532d}.speed{margin-top:16px;padding-top:14px;border-top:1px solid #e2e8f0}.speed>span{display:block;font-size:12px;color:#64748b;margin-bottom:8px}.speed>div{display:flex;gap:6px}.speed button{flex:1}.speed button.sel{background:#dcfce7;border-color:#16a34a;color:#14532d;font-weight:700}.help{margin-top:12px;color:#64748b;font-size:12px;line-height:1.7}.help p{margin:5px 0 0}.error{margin-top:12px;padding:10px;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:10px;font-size:12px}
+:root{font-family:"Noto Kufi Arabic","Segoe UI",Tahoma,sans-serif;color:#1f2937;background:#f8fafc}*{box-sizing:border-box}body{margin:0;background:#f8fafc}button{font:inherit}.app{padding:18px;max-width:520px;margin:auto}header{display:flex;gap:12px;align-items:center;margin-bottom:16px}.mark{width:42px;height:42px;border-radius:12px;display:grid;place-items:center;background:#14532d;color:#fff;font-size:22px;font-weight:800}h1{margin:0;font-size:20px}header p{margin:3px 0 0;color:#64748b;font-size:12px}.panel{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:16px;box-shadow:0 8px 22px #0f172a0f}.status{display:flex;gap:8px;align-items:center;color:#475569;font-size:12px}.status i{width:8px;height:8px;border-radius:50%;background:#94a3b8}.status i.ok{background:#16a34a}.current{min-height:54px;display:grid;place-items:center;margin:16px 0 12px;background:#f1f5f9;border-radius:12px;font-size:22px;font-weight:700;color:#14532d}.bar{height:7px;background:#e2e8f0;border-radius:99px;overflow:hidden}.bar span{display:block;height:100%;background:#16a34a}.times{display:flex;justify-content:space-between;color:#64748b;font-size:11px;margin-top:6px}.actions{display:grid;grid-template-columns:1.5fr 1fr 1fr;gap:8px;margin-top:16px}button{border:1px solid #cbd5e1;border-radius:10px;padding:9px 10px;background:#fff;color:#334155;cursor:pointer}button:disabled{opacity:.5;cursor:not-allowed}button.primary{color:#fff;background:#14532d;border-color:#14532d}.speed{margin-top:16px;padding-top:14px;border-top:1px solid #e2e8f0}.speed>span{display:block;font-size:12px;color:#64748b;margin-bottom:8px}.speed>div{display:flex;gap:6px}.speed button{flex:1}.speed button.sel{background:#dcfce7;border-color:#16a34a;color:#14532d;font-weight:700}.help{margin-top:12px;color:#64748b;font-size:12px;line-height:1.7}.help p{margin:5px 0 0}.error{margin-top:12px;padding:10px;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:10px;font-size:12px}
+
+/* ═══════════════════════════════════════════════════════════
+   [UX-1] Button States — يجعل الأزرار تبدو حيّة
+   ═══════════════════════════════════════════════════════════ */
+button {
+  transition: background 0.15s ease,
+              transform 0.08s ease,
+              box-shadow 0.15s ease;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: #f1f5f9;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+
+button:active:not(:disabled) {
+  transform: scale(0.97);
+  box-shadow: none;
+}
+
+button:focus-visible {
+  outline: 2px solid #14532d;
+  outline-offset: 2px;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+button.primary:hover:not(:disabled) {
+  background: #166534;
+  box-shadow: 0 2px 6px rgba(20, 83, 45, 0.2);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   [UX-2] إصلاح تباين النص الخفيف (WCAG AA)
+   قبل: #64748b = 3.16:1 (فاشل)
+   بعد:  #475569 = 5.87:1 (ناجح)
+   ═══════════════════════════════════════════════════════════ */
+header p,
+.times,
+.speed > span,
+.help,
+.help p {
+  color: #475569;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   [UX-3] قسم SSML — تنسيق مفقود
+   ═══════════════════════════════════════════════════════════ */
+.ssml-controls {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.ssml-controls > span {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #475569;
+  font-weight: 600;
+}
+
+.ssml-controls > div {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   [UX-4] سجل التشخيص — مظهر نظيف
+   ═══════════════════════════════════════════════════════════ */
+.debug {
+  margin-top: 12px;
+}
+
+.debug summary {
+  cursor: pointer;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: #475569;
+  background: #f8fafc;
+  border-radius: 8px;
+  user-select: none;
+  transition: background 0.15s ease;
+}
+
+.debug summary:hover {
+  background: #f1f5f9;
+}
+
+.debug pre {
+  max-height: 200px;
+  overflow: auto;
+  margin-top: 8px;
+  padding: 8px;
+  font-size: 10px;
+  line-height: 1.4;
+  direction: ltr;
+  text-align: left;
+  background: #0f172a;
+  color: #86efac;
+  border-radius: 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   [UX-5] زر "خيارات متقدمة" للطي
+   ═══════════════════════════════════════════════════════════ */
+.advanced-toggle {
+  width: 100%;
+  margin-top: 16px;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  text-align: right;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.advanced-toggle::after {
+  content: "▾";
+  transition: transform 0.2s ease;
+}
+
+.advanced-toggle[aria-expanded="true"]::after {
+  transform: rotate(180deg);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   [UX-6] فاصل بصري بين أقسام التحكم
+   ═══════════════════════════════════════════════════════════ */
+.control-section {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.control-section:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   [UX-7] مؤشر تحميل أنيق
+   ═══════════════════════════════════════════════════════════ */
+.spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-inline-start: 8px;
+  border: 2px solid #cbd5e1;
+  border-top-color: #14532d;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  vertical-align: middle;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   [FIX] أزرار وضع القراءة (SSML) — تفاعل بصري واضح
+   ═══════════════════════════════════════════════════════════ */
+
+.ssml-controls > div {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.ssml-controls button {
+  flex: 1;
+  min-height: 38px;
+  padding: 8px 14px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: #475569;
+  background: #f8fafc;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.15s ease,
+              border-color 0.15s ease,
+              color 0.15s ease,
+              transform 0.08s ease,
+              box-shadow 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ssml-controls button:hover:not(:disabled) {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #1e293b;
+}
+
+.ssml-controls button:active:not(:disabled) {
+  transform: scale(0.96);
+  background: #e2e8f0;
+}
+
+.ssml-controls button:focus-visible {
+  outline: 2px solid #14532d;
+  outline-offset: 2px;
+}
+
+.ssml-controls button.sel {
+  color: #ffffff;
+  background: #14532d;
+  border-color: #14532d;
+  font-weight: 700;
+  box-shadow: 0 2px 6px rgba(20, 83, 45, 0.25);
+}
+
+.ssml-controls button.sel:hover:not(:disabled) {
+  background: #166534;
+  border-color: #166534;
+  color: #ffffff;
+}
+
+.ssml-controls button.sel:active:not(:disabled) {
+  transform: scale(0.96);
+  background: #0f3d24;
+}
+
+.ssml-controls button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.ssml-controls > span {
+  display: block;
+  margin-bottom: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+}

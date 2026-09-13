@@ -20,7 +20,7 @@ def voice():
     _voice=PiperVoice.load(MODEL,include_alignments=True)
  return _voice
 class Req(BaseModel):
- text:str=Field(min_length=1,max_length=12000); speed:float=Field(default=1,ge=.5,le=2)
+ text:str=Field(min_length=1,max_length=12000); speed:float=Field(default=1,ge=.5,le=2); ssml:bool=Field(default=False)
 def cp(v:str)->str:
  v=unicodedata.normalize('NFD',v)
  return '' if v.isspace() or unicodedata.category(v).startswith('P') else v
@@ -81,7 +81,10 @@ def synth(text,speed):
 def health():return {'ok':MODEL.exists(),'voice_loaded':_voice is not None,'model':MODEL.name}
 @app.post('/tts')
 def tts(r:Req):
- text=unicodedata.normalize('NFC',r.text).replace('\u00a0',' ').strip()
+ if r.ssml:
+  text=r.text.strip()
+ else:
+  text=unicodedata.normalize('NFC',r.text).replace('\u00a0',' ').strip()
  if not text:raise HTTPException(400,'النص فارغ')
  try:a,d,w=synth(text,r.speed)
  except Exception as e:raise HTTPException(500,f'TTS failed: {e}') from e

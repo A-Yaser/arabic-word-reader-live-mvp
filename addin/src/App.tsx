@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   health,
   synthesize,
+  synthesizeWithSSML,
   type TtsResponse,
   type WordTiming,
 } from "./api";
@@ -12,6 +13,8 @@ import {
   occurrence,
   prepareReadingPosition,
   updateWordHighlight,
+  getHighlightPerfStats,
+  resetHighlightPerfStats,
 } from "./word";
 
 import "./styles.css";
@@ -36,6 +39,16 @@ function formatTime(seconds: number) {
   return `${Math.floor(
     value / 60
   )}:${String(value % 60).padStart(2, "0")}`;
+}
+
+// ═══════════════════════════════════════════════════════════
+// [PERF] Helper: percentile calculation
+// ═══════════════════════════════════════════════════════════
+function percentile(arr: number[], p: number): number {
+  if (arr.length === 0) return 0;
+  const sorted = [...arr].sort((a, b) => a - b);
+  const idx = Math.ceil((p / 100) * sorted.length) - 1;
+  return sorted[Math.max(0, idx)];
 }
 
 export default function App() {
@@ -88,6 +101,21 @@ export default function App() {
       Promise.resolve()
     );
 
+  // ═══════════════════════════════════════════════════════════
+  // [PERF] Highlight performance tracking
+  // ═══════════════════════════════════════════════════════════
+  const highlightStatsRef = useRef({
+    totalWords: 0,
+    completedWords: 0,
+    skippedStale: 0,
+    skippedBookmark: 0,
+    errors: 0,
+    queueToHighlightLatencies: [] as number[],
+    audioToHighlightLatencies: [] as number[],
+    chunkPlaybackStartMs: 0,
+    startTime: 0,
+  });
+
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [playing, setPlaying] =
@@ -108,6 +136,10 @@ export default function App() {
   const [debugLog, setDebugLog] = useState<
     string[]
   >([]);
+
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  const [useSSML, setUseSSML] = useState(false);
 
   // ─────────────────────────────────────────
   // التقاط سطور [AWR] لعرضها داخل الواجهة
@@ -178,6 +210,46 @@ export default function App() {
 
     highlightQueueRef.current =
       Promise.resolve();
+
+    // ═══════════════════════════════════════════════════════════
+    // [PERF] Dump highlight session summary
+    // ═══════════════════════════════════════════════════════════
+    const stats = highlightStatsRef.current;
+    if (stats.completedWords > 0) {
+      const q2h = stats.queueToHighlightLatencies;
+      const a2h = stats.audioToHighlightLatencies;
+      const wordStats = getHighlightPerfStats();
+
+      log(
+        `[PERF] === HIGHLIGHT SESSION SUMMARY ===\n` +
+        `  totalQueued=${stats.totalWords}\n` +
+        `  completed=${stats.completedWords}\n` +
+        `  skippedStale=${stats.skippedStale}\n` +
+        `  skippedNoBookmark=${stats.skippedBookmark}\n` +
+        `  errors=${stats.errors}\n` +
+        `  queueToHighlight: p50=${percentile(q2h, 50).toFixed(1)}ms p95=${percentile(q2h, 95).toFixed(1)}ms max=${(q2h.length > 0 ? Math.max(...q2h) : 0).toFixed(1)}ms avg=${(q2h.length > 0 ? q2h.reduce((a, b) => a + b, 0) / q2h.length : 0).toFixed(1)}ms\n` +
+        `  audioToHighlight: p50=${percentile(a2h, 50).toFixed(1)}ms p95=${percentile(a2h, 95).toFixed(1)}ms max=${(a2h.length > 0 ? Math.max(...a2h) : 0).toFixed(1)}ms avg=${(a2h.length > 0 ? a2h.reduce((a, b) => a + b, 0) / a2h.length : 0).toFixed(1)}ms\n` +
+        `  word.run=${wordStats.wordRunCalls}\n` +
+        `  context.sync=${wordStats.syncCalls}\n` +
+        `  search=${wordStats.searchCalls}\n` +
+        `  sync/word=${(wordStats.syncCalls / stats.completedWords).toFixed(1)}\n` +
+        `  search/word=${(wordStats.searchCalls / stats.completedWords).toFixed(1)}`
+      );
+    }
+
+    highlightStatsRef.current = {
+      totalWords: 0,
+      completedWords: 0,
+      skippedStale: 0,
+      skippedBookmark: 0,
+      errors: 0,
+      queueToHighlightLatencies: [],
+      audioToHighlightLatencies: [],
+      chunkPlaybackStartMs: 0,
+      startTime: 0,
+    };
+
+    resetHighlightPerfStats();
   };
 
   const cleanupPlayback = async () => {
@@ -220,11 +292,14 @@ export default function App() {
     const bookmark = bookmarkRef.current;
 
     if (!bookmark) {
+      highlightStatsRef.current.skippedBookmark++;
       log(
         "queueHighlight: SKIPPED (no bookmark)"
       );
       return;
     }
+
+    highlightStatsRef.current.totalWords++;
 
     const occurrenceIndex = occurrence(
       word.text,
@@ -244,6 +319,10 @@ export default function App() {
       occurrence: occurrenceIndex,
     };
 
+    // === MERTRIC: Timestamps for latency calculation ===
+    const tQueueTime = performance.now();
+    const wordAudioStartMs = word.start_ms;
+
     highlightQueueRef.current =
       highlightQueueRef.current.then(
         async () => {
@@ -258,6 +337,7 @@ export default function App() {
             requestedAt <
             latestWordIndexRef.current - 2
           ) {
+            highlightStatsRef.current.skippedStale++;
             log(
               `queueHighlight: SKIP stale word="${word.text}" at ${requestedAt} (latest=${latestWordIndexRef.current})`
             );
@@ -265,6 +345,8 @@ export default function App() {
           }
 
           try {
+            const tHighlightStart = performance.now();
+
             await updateWordHighlight(
               bookmark,
               previous,
@@ -274,10 +356,38 @@ export default function App() {
               }
             );
 
+            const tHighlightEnd = performance.now();
+            highlightStatsRef.current.completedWords++;
+
+            // === MERTRIC: Queue-to-highlight latency ===
+            const queueToHighlightMs = tHighlightEnd - tQueueTime;
+            highlightStatsRef.current.queueToHighlightLatencies.push(queueToHighlightMs);
+
+            // === MERTRIC: Audio-to-highlight latency ===
+            // absoluteWordAudioTime = chunkPlaybackStartWallClock + word.start_ms
+            const chunkPlaybackStartMs = highlightStatsRef.current.chunkPlaybackStartMs;
+            const absoluteWordAudioTimeMs = chunkPlaybackStartMs + wordAudioStartMs;
+            const audioToHighlightMs = tHighlightEnd - absoluteWordAudioTimeMs;
+            highlightStatsRef.current.audioToHighlightLatencies.push(audioToHighlightMs);
+
+            // Log every 10th word for performance monitoring
+            if (highlightStatsRef.current.completedWords % 10 === 0) {
+              const stats = highlightStatsRef.current;
+              const q2h = stats.queueToHighlightLatencies;
+              const a2h = stats.audioToHighlightLatencies;
+              log(
+                `[PERF] highlight: words=${stats.completedWords}/${stats.totalWords} ` +
+                `skip=${stats.skippedStale} ` +
+                `q2h p50=${percentile(q2h, 50).toFixed(1)}ms p95=${percentile(q2h, 95).toFixed(1)}ms ` +
+                `a2h p50=${percentile(a2h, 50).toFixed(1)}ms p95=${percentile(a2h, 95).toFixed(1)}ms`
+              );
+            }
+
             log(
-              `queueHighlight: OK word="${word.text}"`
+              `queueHighlight: OK word="${word.text}" q2h=${queueToHighlightMs.toFixed(1)}ms a2h=${audioToHighlightMs.toFixed(1)}ms`
             );
           } catch (e) {
+            highlightStatsRef.current.errors++;
             log(
               `queueHighlight: ERROR word="${word.text}" —`,
               e instanceof Error
@@ -374,7 +484,9 @@ export default function App() {
       );
     }
 
-    const promise = synthesize(text, speed).then(
+    const promise = synthesizeWithSSML(text, speed, {
+      ssml: useSSML,
+    }).then(
       (response) => {
         if (
           session === sessionRef.current
@@ -431,6 +543,14 @@ export default function App() {
       return;
     }
 
+    // === MERTRIC: Chunk lifecycle ===
+    const tChunkStart = performance.now();
+    log(
+      `[PERF] playChunk: #${index} start, ` +
+      `audio_duration=${response.duration_ms}ms, ` +
+      `words=${response.words.length}`
+    );
+
     const audioUrl =
       URL.createObjectURL(
         blob(
@@ -472,6 +592,16 @@ export default function App() {
       stopAnimation();
       URL.revokeObjectURL(audioUrl);
 
+      // === MERTRIC: Chunk ended ===
+      const tChunkEnded = performance.now();
+      const chunkWallTimeMs = tChunkEnded - tChunkStart;
+      log(
+        `[PERF] playChunk: #${index} ENDED | ` +
+        `wallTime=${chunkWallTimeMs.toFixed(0)}ms | ` +
+        `audioDuration=${response.duration_ms}ms | ` +
+        `delta=${(chunkWallTimeMs - response.duration_ms).toFixed(0)}ms`
+      );
+
       if (
         session !== sessionRef.current
       ) {
@@ -509,10 +639,30 @@ export default function App() {
         return;
       }
 
+      // === MERTRIC: Gap between chunks ===
+      const tGapStart = performance.now();
+
       try {
+        // === MERTRIC: Check prefetch status ===
+        const existingResponse = responsesRef.current[nextIndex];
+        const pendingRequest = pendingRef.current.get(nextIndex);
+
+        let prefetchStatus = "fresh";
+        if (existingResponse) {
+          prefetchStatus = "cache_hit";
+        } else if (pendingRequest) {
+          prefetchStatus = "pending";
+        }
+
         const next = await requestChunk(
           nextIndex,
           session
+        );
+
+        const tGapEnd = performance.now();
+        const gapMs = tGapEnd - tGapStart;
+        log(
+          `[PERF] playChunk: gap #${index}→#${nextIndex} = ${gapMs.toFixed(0)}ms (prefetch=${prefetchStatus})`
         );
 
         if (
@@ -564,7 +714,15 @@ export default function App() {
       }
     };
 
+    // === MERTRIC: audio.play() timing ===
+    const tAudioPlayStart = performance.now();
+
     await audio.play();
+
+    const tAudioPlayResolved = performance.now();
+    log(
+      `[PERF] playChunk: #${index} audio.play() resolved in ${(tAudioPlayResolved - tAudioPlayStart).toFixed(1)}ms`
+    );
 
     if (
       session !== sessionRef.current
@@ -576,6 +734,12 @@ export default function App() {
     playingRef.current = true;
     setPlaying(true);
 
+    // === MERTRIC: Record chunk playback start wall clock ===
+    highlightStatsRef.current.chunkPlaybackStartMs = performance.now();
+    log(
+      `[PERF] playChunk: #${index} chunkPlaybackStartMs set`
+    );
+
     animationRef.current =
       requestAnimationFrame(() =>
         animationLoop(session)
@@ -585,7 +749,9 @@ export default function App() {
   const startReading = async () => {
     const session = ++sessionRef.current;
 
-    log(`startReading: session=${session}`);
+    // === MERTRIC: Start Click ===
+    const tStartClick = performance.now();
+    log(`[PERF] startReading: session=${session}, click at ${tStartClick.toFixed(0)}`);
 
     suppressSelectionRef.current = true;
 
@@ -601,15 +767,16 @@ export default function App() {
         suppressSelectionRef.current = false;
       }, 600);
 
-      const t0 = performance.now();
+      // === MERTRIC: Prepare Phase ===
+      const tPrepareStart = performance.now();
 
       const prepared =
         await prepareReadingPosition();
 
+      const tPrepareEnd = performance.now();
+      const prepareMs = tPrepareEnd - tPrepareStart;
       log(
-        `startReading: prepare = ${(
-          performance.now() - t0
-        ).toFixed(0)}ms`
+        `[PERF] startReading: prepare phase = ${prepareMs.toFixed(0)}ms`
       );
 
       if (
@@ -635,17 +802,18 @@ export default function App() {
 
       setStatus("جارٍ توليد الصوت…");
 
-      const t1 = performance.now();
+      // === MERTRIC: TTS Chunk 0 ===
+      const tTtsStart = performance.now();
 
       const first = await requestChunk(
         0,
         session
       );
 
+      const tTtsEnd = performance.now();
+      const ttsMs = tTtsEnd - tTtsStart;
       log(
-        `startReading: TTS chunk 0 = ${(
-          performance.now() - t1
-        ).toFixed(0)}ms`
+        `[PERF] startReading: TTS chunk 0 = ${ttsMs.toFixed(0)}ms, audio_duration=${first.duration_ms}ms`
       );
 
       if (
@@ -659,7 +827,17 @@ export default function App() {
 
       setHasSession(true);
 
+      // === MERTRIC: audio.play() + "playing" event ===
+      const tAudioPlayCall = performance.now();
+      log(`[PERF] startReading: calling playChunk(0)`);
+
       await playChunk(0, first, session);
+
+      const tAudioPlayResolved = performance.now();
+      log(
+        `[PERF] startReading: playChunk(0) returned in ${(tAudioPlayResolved - tAudioPlayCall).toFixed(0)}ms`
+      );
+
     } catch (e) {
       if (
         e instanceof Error &&
@@ -801,15 +979,23 @@ export default function App() {
       try {
         await health();
 
+        // === MERTRIC: Warm-up ===
+        const tWarmupStart = performance.now();
+        log(`[PERF] warmup: started at ${tWarmupStart.toFixed(0)}`);
+
         setReady(true);
         setStatus("جاهز للقراءة الحية");
 
         // تسخين TTS مسبقًا لتحميل نموذج Piper
-        void synthesize("مرحبا", 1).catch(
-          () => {
-            /* تجاهل — مجرد تسخين */
-          }
-        );
+        void synthesize("مرحبا", 1)
+          .then(() => {
+            const tWarmupEnd = performance.now();
+            log(`[PERF] warmup: COMPLETED in ${(tWarmupEnd - tWarmupStart).toFixed(0)}ms`);
+          })
+          .catch(() => {
+            const tWarmupEnd = performance.now();
+            log(`[PERF] warmup: FAILED in ${(tWarmupEnd - tWarmupStart).toFixed(0)}ms`);
+          });
 
         Office.context.document.addHandlerAsync(
           Office.EventType
@@ -858,25 +1044,36 @@ export default function App() {
       </header>
 
       <section className="panel">
-        <div className="status">
-          <i className={ready ? "ok" : ""} />
+        <div className="status" role="status" aria-live="polite">
+          <i
+            className={ready ? "ok" : ""}
+            aria-label={ready ? "متصل" : "غير متصل"}
+          />
           {status}
+          {busy && <span className="spinner" aria-hidden="true" />}
         </div>
 
         <div className="current">
           {current || "—"}
         </div>
 
-        <div className="bar">
+        <div
+          className="bar"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={
+            duration
+              ? Math.round((elapsed / duration) * 100)
+              : 0
+          }
+          aria-label="تقدم القراءة"
+        >
           <span
             style={{
               width: `${
                 duration
-                  ? Math.min(
-                      100,
-                      (elapsed / duration) *
-                        100
-                    )
+                  ? Math.min(100, (elapsed / duration) * 100)
                   : 0
               }%`,
             }}
@@ -892,60 +1089,85 @@ export default function App() {
           <button
             className="primary"
             disabled={!ready || busy}
-            onClick={() =>
-              void startReading()
-            }
+            aria-label="ابدأ القراءة من موضع المؤشر"
+            onClick={() => void startReading()}
           >
-            {busy
-              ? "جارٍ التحضير…"
-              : "▶ ابدأ من المؤشر"}
+            {busy ? "جارٍ التحضير…" : "▶ ابدأ من المؤشر"}
           </button>
 
           <button
             disabled={!canPause}
-            onClick={() =>
-              void pauseResume()
-            }
+            aria-label={playing ? "إيقاف مؤقت" : "استئناف القراءة"}
+            onClick={() => void pauseResume()}
           >
-            {playing
-              ? "⏸ إيقاف مؤقت"
-              : "▶ استئناف"}
+            {playing ? "⏸ إيقاف مؤقت" : "▶ استئناف"}
           </button>
 
           <button
             disabled={!hasSession}
-            onClick={() =>
-              void stopReading()
-            }
+            aria-label="إيقاف القراءة نهائياً"
+            onClick={() => void stopReading()}
           >
             ■ إيقاف
           </button>
         </div>
 
-        <div className="speed">
+        <div className="speed" role="radiogroup" aria-label="سرعة القراءة">
           <span>سرعة القراءة</span>
 
           <div>
-            {[0.75, 1, 1.25, 1.5].map(
-              (value) => (
-                <button
-                  key={value}
-                  className={
-                    value === speed
-                      ? "sel"
-                      : ""
-                  }
-                  disabled={playing}
-                  onClick={() =>
-                    setSpeed(value)
-                  }
-                >
-                  {value}×
-                </button>
-              )
-            )}
+            {[0.75, 1, 1.25, 1.5].map((value) => (
+              <button
+                key={value}
+                className={value === speed ? "sel" : ""}
+                disabled={playing}
+                role="radio"
+                aria-checked={value === speed}
+                aria-label={`سرعة ${value} ضعف`}
+                onClick={() => setSpeed(value)}
+              >
+                {value}×
+              </button>
+            ))}
           </div>
         </div>
+
+        <button
+          type="button"
+          className="advanced-toggle"
+          aria-expanded={showAdvanced}
+          onClick={() => setShowAdvanced(!showAdvanced)}
+        >
+          <span>خيارات متقدمة</span>
+        </button>
+
+        {showAdvanced && (
+          <div className="ssml-controls">
+            <span>وضع القراءة</span>
+
+            <div>
+              <button
+                className={!useSSML ? "sel" : ""}
+                disabled={playing}
+                role="radio"
+                aria-checked={!useSSML}
+                onClick={() => setUseSSML(false)}
+              >
+                عادي
+              </button>
+
+              <button
+                className={useSSML ? "sel" : ""}
+                disabled={playing}
+                role="radio"
+                aria-checked={useSSML}
+                onClick={() => setUseSSML(true)}
+              >
+                وقفات طبيعية
+              </button>
+            </div>
+          </div>
+        )}
       </section>
 
       <section className="help">
@@ -968,22 +1190,8 @@ export default function App() {
           <summary>
             سجل التشخيص ({debugLog.length})
           </summary>
-
-          <pre
-            style={{
-              maxHeight: 200,
-              overflow: "auto",
-              fontSize: 10,
-              direction: "ltr",
-              textAlign: "left",
-              background: "#111",
-              color: "#0f0",
-              padding: 6,
-              borderRadius: 4,
-            }}
-          >
-            {debugLog.join("\n") ||
-              "(لا توجد رسائل بعد)"}
+          <pre>
+            {debugLog.join("\n") || "(لا توجد رسائل بعد)"}
           </pre>
         </details>
       </section>

@@ -1,6 +1,27 @@
 const log = (...args: unknown[]) =>
   console.log("[AWR]", ...args);
 
+// ═══════════════════════════════════════════════════════════
+// [PERF] Highlight performance counters (reset per session)
+// ═══════════════════════════════════════════════════════════
+let _perfWordRunCount = 0;
+let _perfSyncCount = 0;
+let _perfSearchCount = 0;
+
+export function getHighlightPerfStats() {
+  return {
+    wordRunCalls: _perfWordRunCount,
+    syncCalls: _perfSyncCount,
+    searchCalls: _perfSearchCount,
+  };
+}
+
+export function resetHighlightPerfStats() {
+  _perfWordRunCount = 0;
+  _perfSyncCount = 0;
+  _perfSearchCount = 0;
+}
+
 export interface PreparedReading {
   text: string;
   bookmarkName: string;
@@ -10,7 +31,7 @@ export interface PreparedReading {
 
 const ENDING_MARKS = [".", "!", "؟", "؛", "۔", "\r"];
 const ENDING_SET = new Set(ENDING_MARKS);
-const MAX_CHUNK_CHARS = 300;
+const MAX_CHUNK_CHARS = 150;
 
 function key(v: string) {
   return v
@@ -90,9 +111,12 @@ function splitIntoSentences(text: string): string[] {
  */
 export async function prepareReadingPosition(): Promise<PreparedReading> {
   const t0 = performance.now();
-  log("prepareReadingPosition: started");
+  log("[PERF] prepare: started");
 
   return Word.run(async (context) => {
+    // === MERTRIC: Range Construction ===
+    const tRanges = performance.now();
+
     const selection =
       context.document.getSelection();
 
@@ -108,7 +132,12 @@ export async function prepareReadingPosition(): Promise<PreparedReading> {
     const readingRange =
       start.expandTo(documentEnd);
 
-    // ---- SYNC #1: تحميل النص + بناء فهرس الكلمات ----
+    const rangeConstructionMs = performance.now() - tRanges;
+    log(`[PERF] prepare: rangeConstruction = ${rangeConstructionMs.toFixed(1)}ms`);
+
+    // === MERTRIC: getTextRanges + load ===
+    const tGetRanges = performance.now();
+
     readingRange.load("text");
 
     const wordRanges = readingRange.getTextRanges(
@@ -118,7 +147,14 @@ export async function prepareReadingPosition(): Promise<PreparedReading> {
 
     wordRanges.load("items/text");
 
+    const getRangesSetupMs = performance.now() - tGetRanges;
+    log(`[PERF] prepare: getTextRanges setup = ${getRangesSetupMs.toFixed(1)}ms`);
+
+    // === MERTRIC: Sync #1 ===
+    const tSync1 = performance.now();
     await context.sync();
+    const sync1Ms = performance.now() - tSync1;
+    log(`[PERF] prepare: sync #1 = ${sync1Ms.toFixed(1)}ms`);
 
     const fullText = readingRange.text
       .replace(/\u00a0/g, " ")
@@ -130,7 +166,9 @@ export async function prepareReadingPosition(): Promise<PreparedReading> {
       );
     }
 
-    // بناء فهرس الكلمات
+    // === MERTRIC: wordIndex Construction ===
+    const tWordIndex = performance.now();
+
     const wordIndex: { text: string; start: number; end: number }[] = [];
     let searchOffset = 0;
 
@@ -154,11 +192,12 @@ export async function prepareReadingPosition(): Promise<PreparedReading> {
       }
     }
 
-    log(
-      `prepareReadingPosition: wordIndex built, ${wordIndex.length} words`
-    );
+    const wordIndexMs = performance.now() - tWordIndex;
+    log(`[PERF] prepare: wordIndex build = ${wordIndexMs.toFixed(1)}ms, words=${wordIndex.length}`);
 
-    // تقسيم إلى مقاطع للـTTS
+    // === MERTRIC: Chunking ===
+    const tChunking = performance.now();
+
     const sentences = splitIntoSentences(fullText);
     let chunks: string[] = [];
 
@@ -170,17 +209,42 @@ export async function prepareReadingPosition(): Promise<PreparedReading> {
       chunks = splitLongText(fullText);
     }
 
-    // ---- SYNC #2: إنشاء bookmark ----
+    const chunkingMs = performance.now() - tChunking;
+    log(`[PERF] prepare: chunking = ${chunkingMs.toFixed(1)}ms, chunks=${chunks.length}`);
+
+    // === MERTRIC: Bookmark Creation + Sync #2 ===
+    const tBookmark = performance.now();
+
     const bookmarkName = `_AWR_${Date.now().toString(36)}`;
 
     readingRange.insertBookmark(bookmarkName);
 
+    const tSync2 = performance.now();
     await context.sync();
+    const sync2Ms = performance.now() - tSync2;
+    const bookmarkTotalMs = performance.now() - tBookmark;
+    log(`[PERF] prepare: bookmark + sync #2 = ${bookmarkTotalMs.toFixed(1)}ms (sync=${sync2Ms.toFixed(1)}ms)`);
 
+    // === MERTRIC: Chunk size statistics ===
+    const chunkSizes = chunks.map(c => c.length);
+    const avgChunkSize = chunkSizes.length > 0
+      ? chunkSizes.reduce((a, b) => a + b, 0) / chunkSizes.length
+      : 0;
+    const minChunkSize = chunkSizes.length > 0 ? Math.min(...chunkSizes) : 0;
+    const maxChunkSize = chunkSizes.length > 0 ? Math.max(...chunkSizes) : 0;
+
+    const totalTimeMs = performance.now() - t0;
     log(
-      `prepareReadingPosition: TOTAL = ${(
-        performance.now() - t0
-      ).toFixed(0)}ms, words=${wordIndex.length}, chunks=${chunks.length}`
+      `[PERF] prepare: TOTAL = ${totalTimeMs.toFixed(0)}ms | ` +
+      `textChars=${fullText.length} | ` +
+      `wordRanges=${wordRanges.items.length} | ` +
+      `wordIndex=${wordIndex.length} | ` +
+      `chunks=${chunks.length} | ` +
+      `avgChunkSize=${avgChunkSize.toFixed(0)} min=${minChunkSize} max=${maxChunkSize} | ` +
+      `rangeConstruction=${rangeConstructionMs.toFixed(0)}ms | ` +
+      `sync#1=${sync1Ms.toFixed(0)}ms | ` +
+      `wordIndex=${wordIndexMs.toFixed(0)}ms | ` +
+      `sync#2=${sync2Ms.toFixed(0)}ms`
     );
 
     return {
@@ -192,12 +256,42 @@ export async function prepareReadingPosition(): Promise<PreparedReading> {
   });
 }
 
+// ═══════════════════════════════════════════════════════════
+// [FIX] تتبع التظليل الحالي عبر bookmark مستقل
+// ═══════════════════════════════════════════════════════════
+let _currentHighlightBookmark: string | null = null;
+
+/**
+ * إزالة التظليل الحالي باستخدام bookmark النطاق
+ * (بدون بحث نصي — يعمل حتى لو تغيّر النص).
+ */
+async function clearCurrentHighlight(): Promise<void> {
+  if (!_currentHighlightBookmark) return;
+
+  const bookmarkName = _currentHighlightBookmark;
+  _currentHighlightBookmark = null;
+
+  await Word.run(async (context) => {
+    try {
+      const range =
+        context.document.getBookmarkRange(bookmarkName);
+
+      range.font.highlightColor = "";
+      context.document.deleteBookmark(bookmarkName);
+
+      await context.sync();
+    } catch {
+      // الـbookmark قد يكون حُذف تلقائيًا عند تعديل النص
+    }
+  });
+}
+
 /**
  * تحديث التظليل: إزالة السابق + إضافة الجديد
  * في Word.run واحد.
  *
- * يستخدم font.highlightColor (الذي يعمل دائمًا)
- * مع إدارة دورة حياة التظليل يدويًا.
+ * - الإزالة تتم عبر bookmark النطاق (مضمون 100%)
+ * - الإضافة تتم عبر search + insertBookmark جديد
  */
 export async function updateWordHighlight(
   bookmark: string,
@@ -212,65 +306,81 @@ export async function updateWordHighlight(
 ): Promise<void> {
   if (!previous && !next) return;
 
+  _perfWordRunCount++;
+
   await Word.run(async (context) => {
     try {
+      // ─── 1. إزالة التظليل السابق عبر bookmark (بدون بحث) ───
+      if (_currentHighlightBookmark) {
+        try {
+          const prevRange =
+            context.document.getBookmarkRange(
+              _currentHighlightBookmark
+            );
+
+          prevRange.font.highlightColor = "";
+          context.document.deleteBookmark(
+            _currentHighlightBookmark
+          );
+        } catch {
+          // الـbookmark غير صالح — تجاهل
+        }
+
+        _currentHighlightBookmark = null;
+      }
+
+      // ─── 2. إذا لم تكن هناك كلمة جديدة، انتهِ ───
+      if (!next) {
+        _perfSyncCount++;
+        await context.sync();
+        return;
+      }
+
+      // ─── 3. البحث عن الكلمة الجديدة ───
       const scope =
         context.document.getBookmarkRange(bookmark);
 
-      let prevMatches: Word.RangeCollection | null = null;
-      let nextMatches: Word.RangeCollection | null = null;
+      _perfSearchCount++;
+      const matches = scope.search(next.text, {
+        matchWholeWord: true,
+        ignorePunct: true,
+        ignoreSpace: true,
+        matchCase: false,
+      });
 
-      if (previous) {
-        prevMatches = scope.search(previous.text, {
-          matchWholeWord: true,
-          ignorePunct: true,
-          ignoreSpace: true,
-          matchCase: false,
-        });
-        prevMatches.load("items/text");
+      matches.load("items/text");
+
+      _perfSyncCount++;
+      await context.sync();
+
+      if (!matches.items.length) {
+        for (const item of matches.items) item.untrack();
+        matches.untrack();
+        return;
       }
 
-      if (next) {
-        nextMatches = scope.search(next.text, {
-          matchWholeWord: true,
-          ignorePunct: true,
-          ignoreSpace: true,
-          matchCase: false,
-        });
-        nextMatches.load("items/text");
-      }
+      const idx = Math.min(
+        next.occurrence,
+        matches.items.length - 1
+      );
 
-      await context.sync(); // SYNC #1: البحثان
+      const target = matches.items[idx];
 
-      // ✅ إزالة التظليل عن الكلمة السابقة
-      if (prevMatches && prevMatches.items.length) {
-        const idx = Math.min(
-          previous!.occurrence,
-          prevMatches.items.length - 1
-        );
-        prevMatches.items[idx].font.highlightColor = "";
-      }
+      // ─── 4. تظليل الكلمة الجديدة ───
+      target.font.highlightColor = "#FFFF00";
 
-      // ✅ إضافة التظليل للكلمة الجديدة (مؤقتاً)
-      if (nextMatches && nextMatches.items.length) {
-        const idx = Math.min(
-          next!.occurrence,
-          nextMatches.items.length - 1
-        );
-        nextMatches.items[idx].font.highlightColor = "#FFFF00";
-      }
+      // ─── 5. إدراج bookmark على النطاق المُظلَّل ───
+      const hlBookmarkName = `_AWR_HL_${Date.now().toString(36)}`;
+      target.insertBookmark(hlBookmarkName);
 
-      await context.sync(); // SYNC #2: التعديلات
+      _perfSyncCount++;
+      await context.sync();
 
-      // تنظيف المراجع لمنع تسرب الذاكرة
-      if (prevMatches) {
-        for (const item of prevMatches.items) item.untrack();
-        prevMatches.untrack();
-      }
-      if (nextMatches) {
-        for (const item of nextMatches.items) item.untrack();
-        nextMatches.untrack();
-      }
+      _currentHighlightBookmark = hlBookmarkName;
+
+      // تنظيف المراجع
+      for (const item of matches.items) item.untrack();
+      matches.untrack();
     } catch (e) {
       log(
         `updateWordHighlight: ERROR — ${
@@ -283,22 +393,26 @@ export async function updateWordHighlight(
 
 /**
  * تنظيف القراءة بالكامل:
- * - إزالة أي تظليل متبقٍ من النطاق بالكامل
- * - حذف الـbookmark
+ * 1. إزالة تظليل الكلمة الحالية (عبر bookmark)
+ * 2. إزالة أي تظليل متبقٍ في نطاق القراءة الرئيسي
+ * 3. حذف كل الـbookmarks
  */
 export async function clearPlayback(bookmark: string) {
+  // ─── 1. إزالة تظليل الكلمة الحالية ───
+  await clearCurrentHighlight();
+
+  // ─── 2. إزالة أي تظليل متبقٍ + حذف bookmark الرئيسي ───
   await Word.run(async (context) => {
     try {
       const range =
         context.document.getBookmarkRange(bookmark);
 
-      // ✅ إزالة أي تظليل متبقٍّ
       range.font.highlightColor = "";
-
       context.document.deleteBookmark(bookmark);
+
       await context.sync();
     } catch {
-      /* bookmark قد يكون محذوفاً */
+      // الـbookmark قد يكون محذوفًا
     }
   });
 }
